@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/chunkreader"
+	"github.com/jackc/pgx/pgmsg"
 	"github.com/jackc/pgx/pgtype"
 )
 
@@ -88,8 +89,8 @@ type Conn struct {
 	lastActivityTime   time.Time // the last time the connection was used
 	wbuf               [1024]byte
 	writeBuf           WriteBuf
-	pid                int32             // backend pid
-	secretKey          int32             // key to use to send a cancel query message to the server
+	pid                uint32            // backend pid
+	secretKey          uint32            // key to use to send a cancel query message to the server
 	RuntimeParams      map[string]string // parameters that have been reported by the server
 	config             ConnConfig        // config used when establishing this connection
 	txStatus           byte
@@ -116,6 +117,8 @@ type Conn struct {
 	closedChan    chan error
 
 	ConnInfo *pgtype.ConnInfo
+
+	backendMessages map[byte]pgmsg.BackendMessage
 }
 
 // PreparedStatement is a description of a prepared statement
@@ -133,7 +136,7 @@ type PrepareExOptions struct {
 
 // Notification is a message received from the PostgreSQL LISTEN/NOTIFY system
 type Notification struct {
-	PID     int32  // backend pid that sent the notification
+	PID     uint32 // backend pid that sent the notification
 	Channel string // channel from which notification was received
 	Payload string
 }
@@ -281,6 +284,22 @@ func (c *Conn) connect(config ConnConfig, network, address string, tlsConfig *tl
 	c.doneChan = make(chan struct{})
 	c.closedChan = make(chan error)
 
+	c.backendMessages = map[byte]pgmsg.BackendMessage{
+		'1': &pgmsg.ParseComplete{},
+		'2': &pgmsg.BindComplete{},
+		'3': &pgmsg.CloseComplete{},
+		'A': &pgmsg.NotificationResponse{},
+		'C': &pgmsg.CommandComplete{},
+		'D': &pgmsg.DataRow{},
+		'E': &pgmsg.ErrorResponse{},
+		'K': &pgmsg.BackendKeyData{},
+		'R': &pgmsg.Authentication{},
+		'S': &pgmsg.ParameterStatus{},
+		'T': &pgmsg.RowDescription{},
+		't': &pgmsg.ParameterDescription{},
+		'Z': &pgmsg.ReadyForQuery{},
+	}
+
 	if tlsConfig != nil {
 		if c.shouldLog(LogLevelDebug) {
 			c.log(LogLevelDebug, "Starting TLS handshake")
@@ -317,29 +336,27 @@ func (c *Conn) connect(config ConnConfig, network, address string, tlsConfig *tl
 	}
 
 	for {
-		var t byte
-		var r *msgReader
-		t, r, err = c.rxMsg()
+		msg, err := c.rxMsg()
 		if err != nil {
 			return err
 		}
 
-		switch t {
-		case backendKeyData:
-			c.rxBackendKeyData(r)
-		case authenticationX:
-			if err = c.rxAuthenticationX(r); err != nil {
+		switch msg := msg.(type) {
+		case *pgmsg.BackendKeyData:
+			c.rxBackendKeyData(msg)
+		case *pgmsg.Authentication:
+			if err = c.rxAuthenticationX(msg); err != nil {
 				return err
 			}
-		case readyForQuery:
-			c.rxReadyForQuery(r)
+		case *pgmsg.ReadyForQuery:
+			c.rxReadyForQuery(msg)
 			if c.shouldLog(LogLevelInfo) {
 				c.log(LogLevelInfo, "Connection established")
 			}
 
 			// Replication connections can't execute the queries to
 			// populate the c.PgTypes and c.pgsqlAfInet
-			if _, ok := msg.options["replication"]; ok {
+			if _, ok := config.RuntimeParams["replication"]; ok {
 				return nil
 			}
 
@@ -352,7 +369,7 @@ func (c *Conn) connect(config ConnConfig, network, address string, tlsConfig *tl
 
 			return nil
 		default:
-			if err = c.processContextFreeMsg(t, r); err != nil {
+			if err = c.processContextFreeMsg(msg); err != nil {
 				return err
 			}
 		}
@@ -393,7 +410,7 @@ where (
 }
 
 // PID returns the backend PID for this connection.
-func (c *Conn) PID() int32 {
+func (c *Conn) PID() uint32 {
 	return c.pid
 }
 
@@ -744,22 +761,20 @@ func (c *Conn) prepareEx(name, sql string, opts *PrepareExOptions) (ps *Prepared
 	var softErr error
 
 	for {
-		var t byte
-		var r *msgReader
-		t, r, err := c.rxMsg()
+		msg, err := c.rxMsg()
 		if err != nil {
 			return nil, err
 		}
 
-		switch t {
-		case parameterDescription:
-			ps.ParameterOids = c.rxParameterDescription(r)
+		switch msg := msg.(type) {
+		case *pgmsg.ParameterDescription:
+			ps.ParameterOids = c.rxParameterDescription(msg)
 
 			if len(ps.ParameterOids) > 65535 && softErr == nil {
 				softErr = fmt.Errorf("PostgreSQL supports maximum of 65535 parameters, received %d", len(ps.ParameterOids))
 			}
-		case rowDescription:
-			ps.FieldDescriptions = c.rxRowDescription(r)
+		case *pgmsg.RowDescription:
+			ps.FieldDescriptions = c.rxRowDescription(msg)
 			for i := range ps.FieldDescriptions {
 				if dt, ok := c.ConnInfo.DataTypeForOid(ps.FieldDescriptions[i].DataType); ok {
 					ps.FieldDescriptions[i].DataTypeName = dt.Name
@@ -772,8 +787,8 @@ func (c *Conn) prepareEx(name, sql string, opts *PrepareExOptions) (ps *Prepared
 					return nil, fmt.Errorf("unknown oid: %d", ps.FieldDescriptions[i].DataType)
 				}
 			}
-		case readyForQuery:
-			c.rxReadyForQuery(r)
+		case *pgmsg.ReadyForQuery:
+			c.rxReadyForQuery(msg)
 
 			if softErr == nil {
 				c.preparedStatements[name] = ps
@@ -781,7 +796,7 @@ func (c *Conn) prepareEx(name, sql string, opts *PrepareExOptions) (ps *Prepared
 
 			return ps, softErr
 		default:
-			if e := c.processContextFreeMsg(t, r); e != nil && softErr == nil {
+			if e := c.processContextFreeMsg(msg); e != nil && softErr == nil {
 				softErr = e
 			}
 		}
@@ -830,18 +845,16 @@ func (c *Conn) deallocateContext(ctx context.Context, name string) (err error) {
 	}
 
 	for {
-		var t byte
-		var r *msgReader
-		t, r, err := c.rxMsg()
+		msg, err := c.rxMsg()
 		if err != nil {
 			return err
 		}
 
-		switch t {
-		case closeComplete:
+		switch msg.(type) {
+		case *pgmsg.CloseComplete:
 			return nil
 		default:
-			err = c.processContextFreeMsg(t, r)
+			err = c.processContextFreeMsg(msg)
 			if err != nil {
 				return err
 			}
@@ -908,12 +921,12 @@ func (c *Conn) WaitForNotification(ctx context.Context) (notification *Notificat
 	}
 
 	for {
-		t, r, err := c.rxMsg()
+		msg, err := c.rxMsg()
 		if err != nil {
 			return nil, err
 		}
 
-		err = c.processContextFreeMsg(t, r)
+		err = c.processContextFreeMsg(msg)
 		if err != nil {
 			return nil, err
 		}
@@ -1030,62 +1043,54 @@ func (c *Conn) Exec(sql string, arguments ...interface{}) (commandTag CommandTag
 // meaningful in a given context. These messages can occur due to a context
 // deadline interrupting message processing. For example, an interrupted query
 // may have left DataRow messages on the wire.
-func (c *Conn) processContextFreeMsg(t byte, r *msgReader) (err error) {
-	switch t {
-	case bindComplete:
-	case commandComplete:
-	case dataRow:
-	case emptyQueryResponse:
-	case errorResponse:
-		return c.rxErrorResponse(r)
-	case noData:
-	case noticeResponse:
-	case notificationResponse:
-		c.rxNotificationResponse(r)
-	case parameterDescription:
-	case parseComplete:
-	case readyForQuery:
-		c.rxReadyForQuery(r)
-	case rowDescription:
-	case 'S':
-		c.rxParameterStatus(r)
+func (c *Conn) processContextFreeMsg(msg pgmsg.BackendMessage) (err error) {
+	switch msg := msg.(type) {
+	case *pgmsg.ErrorResponse:
+		return c.rxErrorResponse(msg)
+	case *pgmsg.NotificationResponse:
+		c.rxNotificationResponse(msg)
+	case *pgmsg.ReadyForQuery:
+		c.rxReadyForQuery(msg)
+	case *pgmsg.ParameterStatus:
+		c.rxParameterStatus(msg)
 
 	default:
-		return fmt.Errorf("Received unknown message type: %c", t)
+		return fmt.Errorf("Received unknown message type: %T", msg)
 	}
 
 	return nil
 }
 
-func (c *Conn) rxMsg() (t byte, r *msgReader, err error) {
+func (c *Conn) rxMsg() (pgmsg.BackendMessage, error) {
 	if atomic.LoadInt32(&c.status) < connStatusIdle {
-		return 0, nil, ErrDeadConn
+		return nil, ErrDeadConn
 	}
 
-	t, err = c.mr.rxMsg()
+	t, err := c.mr.rxMsg()
 	if err != nil {
 		if netErr, ok := err.(net.Error); !(ok && netErr.Timeout()) {
 			c.die(err)
 		}
+		return nil, err
 	}
 
 	c.lastActivityTime = time.Now()
 
-	if c.shouldLog(LogLevelTrace) {
-		c.log(LogLevelTrace, "rxMsg", "type", string(t), "msgBodyLen", len(c.mr.msgBody))
+	msg, ok := c.backendMessages[t]
+	if !ok {
+		return nil, fmt.Errorf("Received unknown message type: %c", t)
 	}
 
-	return t, &c.mr, err
+	return msg, nil
 }
 
-func (c *Conn) rxAuthenticationX(r *msgReader) (err error) {
-	switch r.readInt32() {
-	case 0: // AuthenticationOk
-	case 3: // AuthenticationCleartextPassword
+func (c *Conn) rxAuthenticationX(msg *pgmsg.Authentication) (err error) {
+	switch msg.Type {
+	case pgmsg.AuthTypeOk:
+	case pgmsg.AuthTypeCleartextPassword:
 		err = c.txPasswordMessage(c.config.Password)
-	case 5: // AuthenticationMD5Password
-		salt := r.readString(4)
-		digestedPassword := "md5" + hexMD5(hexMD5(c.config.Password+c.config.User)+salt)
+	case pgmsg.AuthTypeMD5Password:
+		digestedPassword := "md5" + hexMD5(hexMD5(c.config.Password+c.config.User)+string(msg.Salt[:]))
 		err = c.txPasswordMessage(digestedPassword)
 	default:
 		err = errors.New("Received unknown authentication message")
@@ -1100,115 +1105,74 @@ func hexMD5(s string) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-func (c *Conn) rxParameterStatus(r *msgReader) {
-	key := r.readCString()
-	value := r.readCString()
-	c.RuntimeParams[key] = value
+func (c *Conn) rxParameterStatus(msg *pgmsg.ParameterStatus) {
+	c.RuntimeParams[msg.Name] = msg.Value
 }
 
-func (c *Conn) rxErrorResponse(r *msgReader) (err PgError) {
-	for {
-		switch r.readByte() {
-		case 'S':
-			err.Severity = r.readCString()
-		case 'C':
-			err.Code = r.readCString()
-		case 'M':
-			err.Message = r.readCString()
-		case 'D':
-			err.Detail = r.readCString()
-		case 'H':
-			err.Hint = r.readCString()
-		case 'P':
-			s := r.readCString()
-			n, _ := strconv.ParseInt(s, 10, 32)
-			err.Position = int32(n)
-		case 'p':
-			s := r.readCString()
-			n, _ := strconv.ParseInt(s, 10, 32)
-			err.InternalPosition = int32(n)
-		case 'q':
-			err.InternalQuery = r.readCString()
-		case 'W':
-			err.Where = r.readCString()
-		case 's':
-			err.SchemaName = r.readCString()
-		case 't':
-			err.TableName = r.readCString()
-		case 'c':
-			err.ColumnName = r.readCString()
-		case 'd':
-			err.DataTypeName = r.readCString()
-		case 'n':
-			err.ConstraintName = r.readCString()
-		case 'F':
-			err.File = r.readCString()
-		case 'L':
-			s := r.readCString()
-			n, _ := strconv.ParseInt(s, 10, 32)
-			err.Line = int32(n)
-		case 'R':
-			err.Routine = r.readCString()
-
-		case 0: // End of error message
-			if err.Severity == "FATAL" {
-				c.die(err)
-			}
-			return
-		default: // Ignore other error fields
-			r.readCString()
-		}
+func (c *Conn) rxErrorResponse(msg *pgmsg.ErrorResponse) PgError {
+	err := PgError{
+		Severity:         msg.Severity,
+		Message:          msg.Message,
+		Detail:           msg.Detail,
+		Hint:             msg.Hint,
+		Position:         msg.Position,
+		InternalPosition: msg.InternalPosition,
+		InternalQuery:    msg.InternalQuery,
+		Where:            msg.Where,
+		SchemaName:       msg.SchemaName,
+		TableName:        msg.TableName,
+		ColumnName:       msg.ColumnName,
+		DataTypeName:     msg.DataTypeName,
+		ConstraintName:   msg.ConstraintName,
+		File:             msg.File,
+		Line:             msg.Line,
+		Routine:          msg.Routine,
 	}
+
+	if err.Severity == "FATAL" {
+		c.die(err)
+	}
+
+	return err
 }
 
-func (c *Conn) rxBackendKeyData(r *msgReader) {
-	c.pid = r.readInt32()
-	c.secretKey = r.readInt32()
+func (c *Conn) rxBackendKeyData(msg *pgmsg.BackendKeyData) {
+	c.pid = msg.ProcessID
+	c.secretKey = msg.SecretKey
 }
 
-func (c *Conn) rxReadyForQuery(r *msgReader) {
+func (c *Conn) rxReadyForQuery(msg *pgmsg.ReadyForQuery) {
 	c.readyForQuery = true
-	c.txStatus = r.readByte()
+	c.txStatus = msg.TxStatus
 }
 
-func (c *Conn) rxRowDescription(r *msgReader) (fields []FieldDescription) {
-	fieldCount := r.readInt16()
-	fields = make([]FieldDescription, fieldCount)
-	for i := int16(0); i < fieldCount; i++ {
-		f := &fields[i]
-		f.Name = r.readCString()
-		f.Table = pgtype.Oid(r.readUint32())
-		f.AttributeNumber = r.readInt16()
-		f.DataType = pgtype.Oid(r.readUint32())
-		f.DataTypeSize = r.readInt16()
-		f.Modifier = r.readInt32()
-		f.FormatCode = r.readInt16()
+func (c *Conn) rxRowDescription(msg *pgmsg.RowDescription) []FieldDescription {
+	fields := make([]FieldDescription, len(msg.Fields))
+	for i := 0; i < len(fields); i++ {
+		fields[i].Name = msg.Fields[i].Name
+		fields[i].Table = pgtype.Oid(msg.Fields[i].TableOID)
+		fields[i].AttributeNumber = msg.Fields[i].TableAttributeNumber
+		fields[i].DataType = pgtype.Oid(msg.Fields[i].DataTypeOID)
+		fields[i].DataTypeSize = msg.Fields[i].DataTypeSize
+		fields[i].Modifier = msg.Fields[i].TypeModifier
+		fields[i].FormatCode = msg.Fields[i].Format
 	}
-	return
+	return fields
 }
 
-func (c *Conn) rxParameterDescription(r *msgReader) (parameters []pgtype.Oid) {
-	// Internally, PostgreSQL supports greater than 64k parameters to a prepared
-	// statement. But the parameter description uses a 16-bit integer for the
-	// count of parameters. If there are more than 64K parameters, this count is
-	// wrong. So read the count, ignore it, and compute the proper value from
-	// the size of the message.
-	r.readInt16()
-	parameterCount := len(r.msgBody[r.rp:]) / 4
-
-	parameters = make([]pgtype.Oid, 0, parameterCount)
-
-	for i := 0; i < parameterCount; i++ {
-		parameters = append(parameters, pgtype.Oid(r.readUint32()))
+func (c *Conn) rxParameterDescription(msg *pgmsg.ParameterDescription) []pgtype.Oid {
+	parameters := make([]pgtype.Oid, len(msg.ParameterOIDs))
+	for i := 0; i < len(parameters); i++ {
+		parameters[i] = pgtype.Oid(msg.ParameterOIDs[i])
 	}
-	return
+	return parameters
 }
 
-func (c *Conn) rxNotificationResponse(r *msgReader) {
+func (c *Conn) rxNotificationResponse(msg *pgmsg.NotificationResponse) {
 	n := new(Notification)
-	n.PID = r.readInt32()
-	n.Channel = r.readCString()
-	n.Payload = r.readCString()
+	n.PID = msg.PID
+	n.Channel = msg.Channel
+	n.Payload = msg.Payload
 	c.notifications = append(c.notifications, n)
 }
 
@@ -1453,21 +1417,19 @@ func (c *Conn) ExecEx(ctx context.Context, sql string, options *QueryExOptions, 
 	var softErr error
 
 	for {
-		var t byte
-		var r *msgReader
-		t, r, err = c.rxMsg()
+		msg, err := c.rxMsg()
 		if err != nil {
 			return commandTag, err
 		}
 
-		switch t {
-		case readyForQuery:
-			c.rxReadyForQuery(r)
+		switch msg := msg.(type) {
+		case *pgmsg.ReadyForQuery:
+			c.rxReadyForQuery(msg)
 			return commandTag, softErr
-		case commandComplete:
-			commandTag = CommandTag(r.readCString())
+		case *pgmsg.CommandComplete:
+			commandTag = CommandTag(msg.CommandTag)
 		default:
-			if e := c.processContextFreeMsg(t, r); e != nil && softErr == nil {
+			if e := c.processContextFreeMsg(msg); e != nil && softErr == nil {
 				softErr = e
 			}
 		}
@@ -1545,19 +1507,19 @@ func (c *Conn) waitForPreviousCancelQuery(ctx context.Context) error {
 
 func (c *Conn) ensureConnectionReadyForQuery() error {
 	for !c.readyForQuery {
-		t, r, err := c.rxMsg()
+		msg, err := c.rxMsg()
 		if err != nil {
 			return err
 		}
 
-		switch t {
-		case errorResponse:
-			pgErr := c.rxErrorResponse(r)
+		switch msg := msg.(type) {
+		case *pgmsg.ErrorResponse:
+			pgErr := c.rxErrorResponse(msg)
 			if pgErr.Severity == "FATAL" {
 				return pgErr
 			}
 		default:
-			err = c.processContextFreeMsg(t, r)
+			err = c.processContextFreeMsg(msg)
 			if err != nil {
 				return err
 			}
