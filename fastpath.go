@@ -3,6 +3,7 @@ package pgx
 import (
 	"encoding/binary"
 
+	"github.com/jackc/pgx/pgmsg"
 	"github.com/jackc/pgx/pgtype"
 )
 
@@ -71,23 +72,20 @@ func (f *fastpath) Call(oid pgtype.Oid, args []fpArg) (res []byte, err error) {
 	}
 
 	for {
-		var t byte
-		var r *msgReader
-		t, r, err = f.cn.rxMsg()
+		msg, err := f.cn.rxMsg()
 		if err != nil {
 			return nil, err
 		}
-		switch t {
-		case 'V': // FunctionCallResponse
-			data := r.readBytes(r.readInt32())
-			res = make([]byte, len(data))
-			copy(res, data)
-		case 'Z': // Ready for query
-			f.cn.rxReadyForQuery(r)
+		switch msg := msg.(type) {
+		case *pgmsg.FunctionCallResponse:
+			res = make([]byte, len(msg.Result))
+			copy(res, msg.Result)
+		case *pgmsg.ReadyForQuery:
+			f.cn.rxReadyForQuery(msg)
 			// done
-			return
+			return res, err
 		default:
-			if err := f.cn.processContextFreeMsg(t, r); err != nil {
+			if err := f.cn.processContextFreeMsg(msg); err != nil {
 				return nil, err
 			}
 		}

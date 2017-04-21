@@ -104,10 +104,14 @@ func (dst *ErrorResponse) UnmarshalBinary(src []byte) error {
 }
 
 func (src *ErrorResponse) MarshalBinary() ([]byte, error) {
+	return src.marshalBinary('E')
+}
+
+func (src *ErrorResponse) marshalBinary(typeByte byte) ([]byte, error) {
 	var bigEndian BigEndianBuf
 	buf := &bytes.Buffer{}
 
-	buf.WriteByte('E')
+	buf.WriteByte(typeByte)
 	buf.Write(bigEndian.Uint32(0))
 
 	if src.Severity != "" {

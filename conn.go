@@ -1053,9 +1053,6 @@ func (c *Conn) processContextFreeMsg(msg pgmsg.BackendMessage) (err error) {
 		c.rxReadyForQuery(msg)
 	case *pgmsg.ParameterStatus:
 		c.rxParameterStatus(msg)
-
-	default:
-		return fmt.Errorf("Received unknown message type: %T", msg)
 	}
 
 	return nil
@@ -1081,6 +1078,8 @@ func (c *Conn) rxMsg() (pgmsg.BackendMessage, error) {
 		return nil, fmt.Errorf("Received unknown message type: %c", t)
 	}
 
+	err := msg.UnmarshalBinary(data)
+	TODO
 	return msg, nil
 }
 

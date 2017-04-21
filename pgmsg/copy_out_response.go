@@ -6,26 +6,26 @@ import (
 	"encoding/json"
 )
 
-type CopyInResponse struct {
+type CopyOutResponse struct {
 	OverallFormat     byte
 	ColumnFormatCodes []uint16
 	ParameterOIDs     []uint32
 }
 
-func (*CopyInResponse) Backend() {}
+func (*CopyOutResponse) Backend() {}
 
-func (dst *CopyInResponse) UnmarshalBinary(src []byte) error {
+func (dst *CopyOutResponse) UnmarshalBinary(src []byte) error {
 	buf := bytes.NewBuffer(src)
 
 	if buf.Len() < 2 {
-		return &invalidMessageFormatErr{messageType: "CopyInResponse"}
+		return &invalidMessageFormatErr{messageType: "CopyOutResponse"}
 	}
 	parameterCount := int(binary.BigEndian.Uint16(buf.Next(2)))
 	if buf.Len() != parameterCount*4 {
-		return &invalidMessageFormatErr{messageType: "CopyInResponse"}
+		return &invalidMessageFormatErr{messageType: "CopyOutResponse"}
 	}
 
-	*dst = CopyInResponse{ParameterOIDs: make([]uint32, parameterCount)}
+	*dst = CopyOutResponse{ParameterOIDs: make([]uint32, parameterCount)}
 
 	for i := 0; i < parameterCount; i++ {
 		dst.ParameterOIDs[i] = binary.BigEndian.Uint32(buf.Next(4))
@@ -34,11 +34,11 @@ func (dst *CopyInResponse) UnmarshalBinary(src []byte) error {
 	return nil
 }
 
-func (src *CopyInResponse) MarshalBinary() ([]byte, error) {
+func (src *CopyOutResponse) MarshalBinary() ([]byte, error) {
 	var bigEndian BigEndianBuf
 	buf := &bytes.Buffer{}
 
-	buf.WriteByte('G')
+	buf.WriteByte('t')
 	buf.Write(bigEndian.Uint32(uint32(4 + 2 + 4*len(src.ParameterOIDs))))
 
 	buf.Write(bigEndian.Uint16(uint16(len(src.ParameterOIDs))))
@@ -50,12 +50,12 @@ func (src *CopyInResponse) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (src *CopyInResponse) MarshalJSON() ([]byte, error) {
+func (src *CopyOutResponse) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		Type          string
 		ParameterOIDs []uint32
 	}{
-		Type:          "CopyInResponse",
+		Type:          "CopyOutResponse",
 		ParameterOIDs: src.ParameterOIDs,
 	})
 }
