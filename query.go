@@ -172,6 +172,7 @@ func (rows *Rows) nextColumn() ([]byte, *FieldDescription, bool) {
 
 	buf := rows.values[rows.columnIdx]
 	fd := &rows.fields[rows.columnIdx]
+	rows.columnIdx++
 	return buf, fd, true
 }
 

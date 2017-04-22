@@ -236,6 +236,7 @@ func TestIdentifySystem(t *testing.T) {
 }
 
 func getCurrentTimeline(t *testing.T, rc *pgx.ReplicationConn) int {
+	t.Fatal("TODO")
 	r, err := rc.IdentifySystem()
 	if err != nil {
 		t.Error(err)

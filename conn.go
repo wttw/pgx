@@ -1078,8 +1078,11 @@ func (c *Conn) rxMsg() (pgmsg.BackendMessage, error) {
 		return nil, fmt.Errorf("Received unknown message type: %c", t)
 	}
 
-	err := msg.UnmarshalBinary(data)
-	TODO
+	err = msg.UnmarshalBinary(c.mr.msgBody)
+	if err != nil {
+		return nil, err
+	}
+
 	return msg, nil
 }
 
@@ -1111,6 +1114,7 @@ func (c *Conn) rxParameterStatus(msg *pgmsg.ParameterStatus) {
 func (c *Conn) rxErrorResponse(msg *pgmsg.ErrorResponse) PgError {
 	err := PgError{
 		Severity:         msg.Severity,
+		Code:             msg.Code,
 		Message:          msg.Message,
 		Detail:           msg.Detail,
 		Hint:             msg.Hint,
