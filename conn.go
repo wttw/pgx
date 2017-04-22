@@ -292,11 +292,18 @@ func (c *Conn) connect(config ConnConfig, network, address string, tlsConfig *tl
 		'C': &pgmsg.CommandComplete{},
 		'D': &pgmsg.DataRow{},
 		'E': &pgmsg.ErrorResponse{},
+		'G': &pgmsg.CopyInResponse{},
+		'H': &pgmsg.CopyOutResponse{},
+		'I': &pgmsg.EmptyQueryResponse{},
 		'K': &pgmsg.BackendKeyData{},
+		'n': &pgmsg.NoData{},
+		'N': &pgmsg.NoticeResponse{},
 		'R': &pgmsg.Authentication{},
 		'S': &pgmsg.ParameterStatus{},
-		'T': &pgmsg.RowDescription{},
 		't': &pgmsg.ParameterDescription{},
+		'T': &pgmsg.RowDescription{},
+		'V': &pgmsg.FunctionCallResponse{},
+		'W': &pgmsg.CopyBothResponse{},
 		'Z': &pgmsg.ReadyForQuery{},
 	}
 
@@ -1082,6 +1089,8 @@ func (c *Conn) rxMsg() (pgmsg.BackendMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	fmt.Printf("rxMsg: %#v\n", msg)
 
 	return msg, nil
 }
