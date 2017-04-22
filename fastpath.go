@@ -3,7 +3,7 @@ package pgx
 import (
 	"encoding/binary"
 
-	"github.com/jackc/pgx/pgmsg"
+	"github.com/jackc/pgx/pgproto3"
 	"github.com/jackc/pgx/pgtype"
 )
 
@@ -77,10 +77,10 @@ func (f *fastpath) Call(oid pgtype.Oid, args []fpArg) (res []byte, err error) {
 			return nil, err
 		}
 		switch msg := msg.(type) {
-		case *pgmsg.FunctionCallResponse:
+		case *pgproto3.FunctionCallResponse:
 			res = make([]byte, len(msg.Result))
 			copy(res, msg.Result)
-		case *pgmsg.ReadyForQuery:
+		case *pgproto3.ReadyForQuery:
 			f.cn.rxReadyForQuery(msg)
 			// done
 			return res, err

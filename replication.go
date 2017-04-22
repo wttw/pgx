@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/pgmsg"
+	"github.com/jackc/pgx/pgproto3"
 )
 
 const (
@@ -212,22 +212,22 @@ func (rc *ReplicationConn) readReplicationMessage() (r *ReplicationMessage, err 
 	}
 
 	switch msg := msg.(type) {
-	case *pgmsg.NoticeResponse:
-		pgError := rc.c.rxErrorResponse((*pgmsg.ErrorResponse)(msg))
+	case *pgproto3.NoticeResponse:
+		pgError := rc.c.rxErrorResponse((*pgproto3.ErrorResponse)(msg))
 		if rc.c.shouldLog(LogLevelInfo) {
 			rc.c.log(LogLevelInfo, pgError.Error())
 		}
-	case *pgmsg.ErrorResponse:
+	case *pgproto3.ErrorResponse:
 		err = rc.c.rxErrorResponse(msg)
 		if rc.c.shouldLog(LogLevelError) {
 			rc.c.log(LogLevelError, err.Error())
 		}
 		return
-	case *pgmsg.CopyBothResponse:
+	case *pgproto3.CopyBothResponse:
 		// This is the tail end of the replication process start,
 		// and can be safely ignored
 		return
-	case *pgmsg.CopyData:
+	case *pgproto3.CopyData:
 		msgType := msg.Data[0]
 		rp := 1
 
@@ -339,7 +339,7 @@ func (rc *ReplicationConn) sendReplicationModeQuery(sql string) (*Rows, error) {
 	}
 
 	switch msg := msg.(type) {
-	case *pgmsg.RowDescription:
+	case *pgproto3.RowDescription:
 		rows.fields = rc.c.rxRowDescription(msg)
 		// We don't have c.PgTypes here because we're a replication
 		// connection. This means the field descriptions will have

@@ -1,4 +1,4 @@
-package pgmsg
+package pgproto3
 
 import (
 	"encoding/binary"

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/internal/sanitize"
-	"github.com/jackc/pgx/pgmsg"
+	"github.com/jackc/pgx/pgproto3"
 	"github.com/jackc/pgx/pgtype"
 )
 
@@ -123,7 +123,7 @@ func (rows *Rows) Next() bool {
 		}
 
 		switch msg := msg.(type) {
-		case *pgmsg.RowDescription:
+		case *pgproto3.RowDescription:
 			rows.fields = rows.conn.rxRowDescription(msg)
 			for i := range rows.fields {
 				if dt, ok := rows.conn.ConnInfo.DataTypeForOid(rows.fields[i].DataType); ok {
@@ -134,7 +134,7 @@ func (rows *Rows) Next() bool {
 					return false
 				}
 			}
-		case *pgmsg.DataRow:
+		case *pgproto3.DataRow:
 			if len(msg.Values) != len(rows.fields) {
 				rows.Fatal(ProtocolError(fmt.Sprintf("Row description field count (%v) and data row field count (%v) do not match", len(rows.fields), len(msg.Values))))
 				return false
@@ -142,7 +142,7 @@ func (rows *Rows) Next() bool {
 
 			rows.values = msg.Values
 			return true
-		case *pgmsg.CommandComplete:
+		case *pgproto3.CommandComplete:
 			rows.Close()
 			return false
 

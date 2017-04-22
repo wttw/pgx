@@ -1,4 +1,4 @@
-package pgmsg
+package pgproto3
 
 import (
 	"bytes"
@@ -6,24 +6,26 @@ import (
 	"encoding/json"
 )
 
-type ParameterDescription struct {
-	ParameterOIDs []uint32
+type CopyInResponse struct {
+	OverallFormat     byte
+	ColumnFormatCodes []uint16
+	ParameterOIDs     []uint32
 }
 
-func (*ParameterDescription) Backend() {}
+func (*CopyInResponse) Backend() {}
 
-func (dst *ParameterDescription) UnmarshalBinary(src []byte) error {
+func (dst *CopyInResponse) UnmarshalBinary(src []byte) error {
 	buf := bytes.NewBuffer(src)
 
 	if buf.Len() < 2 {
-		return &invalidMessageFormatErr{messageType: "ParameterDescription"}
+		return &invalidMessageFormatErr{messageType: "CopyInResponse"}
 	}
 	parameterCount := int(binary.BigEndian.Uint16(buf.Next(2)))
 	if buf.Len() != parameterCount*4 {
-		return &invalidMessageFormatErr{messageType: "ParameterDescription"}
+		return &invalidMessageFormatErr{messageType: "CopyInResponse"}
 	}
 
-	*dst = ParameterDescription{ParameterOIDs: make([]uint32, parameterCount)}
+	*dst = CopyInResponse{ParameterOIDs: make([]uint32, parameterCount)}
 
 	for i := 0; i < parameterCount; i++ {
 		dst.ParameterOIDs[i] = binary.BigEndian.Uint32(buf.Next(4))
@@ -32,11 +34,11 @@ func (dst *ParameterDescription) UnmarshalBinary(src []byte) error {
 	return nil
 }
 
-func (src *ParameterDescription) MarshalBinary() ([]byte, error) {
+func (src *CopyInResponse) MarshalBinary() ([]byte, error) {
 	var bigEndian BigEndianBuf
 	buf := &bytes.Buffer{}
 
-	buf.WriteByte('t')
+	buf.WriteByte('G')
 	buf.Write(bigEndian.Uint32(uint32(4 + 2 + 4*len(src.ParameterOIDs))))
 
 	buf.Write(bigEndian.Uint16(uint16(len(src.ParameterOIDs))))
@@ -48,12 +50,12 @@ func (src *ParameterDescription) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (src *ParameterDescription) MarshalJSON() ([]byte, error) {
+func (src *CopyInResponse) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		Type          string
 		ParameterOIDs []uint32
 	}{
-		Type:          "ParameterDescription",
+		Type:          "CopyInResponse",
 		ParameterOIDs: src.ParameterOIDs,
 	})
 }

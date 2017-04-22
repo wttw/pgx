@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/jackc/pgx/pgmsg"
+	"github.com/jackc/pgx/pgproto3"
 )
 
 // CopyFromRows returns a CopyFromSource interface over the provided rows slice
@@ -64,12 +64,12 @@ func (ct *copyFrom) readUntilReadyForQuery() {
 		}
 
 		switch msg := msg.(type) {
-		case *pgmsg.ReadyForQuery:
+		case *pgproto3.ReadyForQuery:
 			ct.conn.rxReadyForQuery(msg)
 			close(ct.readerErrChan)
 			return
-		case *pgmsg.CommandComplete:
-		case *pgmsg.ErrorResponse:
+		case *pgproto3.CommandComplete:
+		case *pgproto3.ErrorResponse:
 			ct.readerErrChan <- ct.conn.rxErrorResponse(msg)
 		default:
 			err = ct.conn.processContextFreeMsg(msg)
@@ -198,7 +198,7 @@ func (c *Conn) readUntilCopyInResponse() error {
 		}
 
 		switch msg := msg.(type) {
-		case *pgmsg.CopyInResponse:
+		case *pgproto3.CopyInResponse:
 			return nil
 		default:
 			err = c.processContextFreeMsg(msg)
