@@ -3,11 +3,12 @@ package pgproto3
 import "net"
 
 type Backend struct {
-	conn net.Conn
+	r io.Reader
+	w io.Writer
 }
 
-func NewBackend() (*Backend, error) {
-
+func NewBackend(r io.Reader, w io.Writer) (*Backend, error) {
+	return &Backend{r: r, w: w}, nil
 }
 
 func (b *Backend) Send(msg BackendMessage) error {
