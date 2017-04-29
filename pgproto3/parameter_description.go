@@ -18,10 +18,11 @@ func (dst *ParameterDescription) UnmarshalBinary(src []byte) error {
 	if buf.Len() < 2 {
 		return &invalidMessageFormatErr{messageType: "ParameterDescription"}
 	}
-	parameterCount := int(binary.BigEndian.Uint16(buf.Next(2)))
-	if buf.Len() != parameterCount*4 {
-		return &invalidMessageFormatErr{messageType: "ParameterDescription"}
-	}
+
+	// Reported parameter count will be incorrect when number of args is greater than uint16
+	buf.Next(2)
+	// Instead infer parameter count by remaining size of message
+	parameterCount := buf.Len() / 4
 
 	*dst = ParameterDescription{ParameterOIDs: make([]uint32, parameterCount)}
 

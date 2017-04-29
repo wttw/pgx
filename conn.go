@@ -20,7 +20,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jackc/pgx/chunkreader"
 	"github.com/jackc/pgx/pgproto3"
 	"github.com/jackc/pgx/pgtype"
 )
@@ -99,7 +98,6 @@ type Conn struct {
 	notifications      []*Notification
 	logger             Logger
 	logLevel           int
-	mr                 msgReader
 	fp                 *fastpath
 	poolResetCount     int
 	preallocatedRows   []Rows
@@ -118,7 +116,7 @@ type Conn struct {
 
 	ConnInfo *pgtype.ConnInfo
 
-	backendMessages map[byte]pgproto3.BackendMessage
+	frontend *pgproto3.Frontend
 }
 
 // PreparedStatement is a description of a prepared statement
@@ -216,8 +214,6 @@ func connect(config ConnConfig, connInfo *pgtype.ConnInfo) (c *Conn, err error) 
 		c.logLevel = LogLevelDebug
 	}
 	c.logger = c.config.Logger
-	c.mr.log = c.log
-	c.mr.shouldLog = c.shouldLog
 
 	if c.config.User == "" {
 		user, err := user.Current()
@@ -284,27 +280,9 @@ func (c *Conn) connect(config ConnConfig, network, address string, tlsConfig *tl
 	c.doneChan = make(chan struct{})
 	c.closedChan = make(chan error)
 
-	c.backendMessages = map[byte]pgproto3.BackendMessage{
-		'1': &pgproto3.ParseComplete{},
-		'2': &pgproto3.BindComplete{},
-		'3': &pgproto3.CloseComplete{},
-		'A': &pgproto3.NotificationResponse{},
-		'C': &pgproto3.CommandComplete{},
-		'D': &pgproto3.DataRow{},
-		'E': &pgproto3.ErrorResponse{},
-		'G': &pgproto3.CopyInResponse{},
-		'H': &pgproto3.CopyOutResponse{},
-		'I': &pgproto3.EmptyQueryResponse{},
-		'K': &pgproto3.BackendKeyData{},
-		'n': &pgproto3.NoData{},
-		'N': &pgproto3.NoticeResponse{},
-		'R': &pgproto3.Authentication{},
-		'S': &pgproto3.ParameterStatus{},
-		't': &pgproto3.ParameterDescription{},
-		'T': &pgproto3.RowDescription{},
-		'V': &pgproto3.FunctionCallResponse{},
-		'W': &pgproto3.CopyBothResponse{},
-		'Z': &pgproto3.ReadyForQuery{},
+	c.frontend, err = pgproto3.NewFrontend(c.conn, c.conn)
+	if err != nil {
+		return err
 	}
 
 	if tlsConfig != nil {
@@ -315,8 +293,6 @@ func (c *Conn) connect(config ConnConfig, network, address string, tlsConfig *tl
 			return err
 		}
 	}
-
-	c.mr.cr = chunkreader.NewChunkReader(c.conn)
 
 	msg := newStartupMessage()
 
@@ -1070,7 +1046,7 @@ func (c *Conn) rxMsg() (pgproto3.BackendMessage, error) {
 		return nil, ErrDeadConn
 	}
 
-	t, err := c.mr.rxMsg()
+	msg, err := c.frontend.Receive()
 	if err != nil {
 		if netErr, ok := err.(net.Error); !(ok && netErr.Timeout()) {
 			c.die(err)
@@ -1080,17 +1056,7 @@ func (c *Conn) rxMsg() (pgproto3.BackendMessage, error) {
 
 	c.lastActivityTime = time.Now()
 
-	msg, ok := c.backendMessages[t]
-	if !ok {
-		return nil, fmt.Errorf("Received unknown message type: %c", t)
-	}
-
-	err = msg.UnmarshalBinary(c.mr.msgBody)
-	if err != nil {
-		return nil, err
-	}
-
-	fmt.Printf("rxMsg: %#v\n", msg)
+	// fmt.Printf("rxMsg: %#v\n", msg)
 
 	return msg, nil
 }

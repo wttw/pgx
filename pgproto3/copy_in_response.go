@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 )
 
 type CopyInResponse struct {
@@ -17,15 +18,19 @@ func (*CopyInResponse) Backend() {}
 func (dst *CopyInResponse) UnmarshalBinary(src []byte) error {
 	buf := bytes.NewBuffer(src)
 
-	if buf.Len() < 2 {
-		return &invalidMessageFormatErr{messageType: "CopyInResponse"}
-	}
-	parameterCount := int(binary.BigEndian.Uint16(buf.Next(2)))
-	if buf.Len() != parameterCount*4 {
+	if buf.Len() < 3 {
 		return &invalidMessageFormatErr{messageType: "CopyInResponse"}
 	}
 
-	*dst = CopyInResponse{ParameterOIDs: make([]uint32, parameterCount)}
+	overallFormat := buf.Next(1)[0]
+
+	parameterCount := int(binary.BigEndian.Uint16(buf.Next(2)))
+	if buf.Len() != parameterCount*4 {
+		fmt.Println(parameterCount, buf.Len())
+		return &invalidMessageFormatErr{messageType: "CopyInResponse"}
+	}
+
+	*dst = CopyInResponse{OverallFormat: overallFormat, ParameterOIDs: make([]uint32, parameterCount)}
 
 	for i := 0; i < parameterCount; i++ {
 		dst.ParameterOIDs[i] = binary.BigEndian.Uint32(buf.Next(4))
